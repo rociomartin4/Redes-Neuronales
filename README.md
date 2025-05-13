@@ -4,6 +4,7 @@
 
 - [@rociomartin4](https://github.com/rociomartin4), Universidad de Almería
 - [@jmvbrocal](https://github.com/jmvbrocal), Universidad de Almería
+- [@Alejandro-Bueso](https://github.com/Alejandro-Bueso), Plataforma Solar Almería
 
 
 ## RESUMEN

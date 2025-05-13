@@ -1,0 +1,428 @@
+################################################################################
+############################ MEMORY CLEANER ####################################
+################################################################################
+
+%reset -f  # Resets the working environment to free up memory and avoid potential conflicts
+
+
+################################################################################
+######################## INSTALLATION OF NECESSARY PACKAGES ####################
+################################################################################
+
+# Import all the necessary libraries for data analysis and modeling
+
+import numpy as np  # Library for handling mathematical operations
+import pandas as pd  # Library for handling data in table structures (DataFrames)
+import gdown  # Library to download files from Google Drive
+import matplotlib.pyplot as plt  # Library for plotting graphs
+from sklearn.model_selection import train_test_split  # To split the data into training and validation sets
+from sklearn.metrics import mean_squared_error, r2_score  # Statistical metrics for model evaluation
+from sklearn.preprocessing import MinMaxScaler  # To normalize the data within a specified range
+from scipy.stats import linregress  # Function to obtain linear regression between two variables
+import tensorflow as tf  # Library for implementing neural networks and machine learning models
+from tensorflow.keras.models import Sequential  # Sequential neural network model
+from tensorflow.keras.layers import Dense  # Fully connected layer in neural networks
+from tensorflow.keras.callbacks import EarlyStopping  # Technique to stop training if no improvement
+from tensorflow.keras import regularizers  # Tools for regularization in neural networks
+
+
+################################################################################
+########################### LOAD THE DATA ######################################
+################################################################################
+
+# Specify the links to download the files from Google Drive.
+# The file ID is the part of the Google Drive link between 'd/' and '/view'
+
+file_id_validation = '1RlqzXzKuXF3majIFQ1ITqlPxxxl7xuch'  # ID of the validation file
+file_id_training = '1BjRir7yGs8vsU1D52n5YjB9HGfYv3ktT'  # ID of the training file
+
+# Create direct download URLs for the Google Drive files
+url_validation = f'https://drive.google.com/uc?id={file_id_validation}'
+url_training = f'https://drive.google.com/uc?id={file_id_training}'
+
+# Download the Excel files from Google Drive
+gdown.download(url_validation, 'validation_dataset.xlsx', quiet=False)  # Download the validation file
+gdown.download(url_training, 'dataset.xlsx', quiet=False)  # Download the training file
+
+# Load the data from the downloaded Excel files
+df = pd.read_excel('dataset.xlsx', engine='openpyxl')  # Load the training data into a DataFrame
+dfv = pd.read_excel('validation_dataset.xlsx', engine='openpyxl')  # Load the validation data
+
+# Verify that the data has been loaded correctly by printing the first few rows
+print(df.head())  # Print the first rows of the training dataset
+
+
+# -----------------------------------------------------
+# TRAINING DATA
+# -----------------------------------------------------
+# Filter the data to get only the rows corresponding to the training set
+df_training = df[df['ANNsubset'] == 'Training']  # Build a DataFrame with only the training data
+# (modify as needed or even remove if there's no need to distinguish)
+
+
+# -----------------------------------------------------
+# VALIDATION DATA
+# -----------------------------------------------------
+# Filter the data to get only the rows corresponding to the validation set
+df_validation = df[df['ANNsubset'] == 'Validation']  # Build a DataFrame with only the validation data
+# (modify as needed or even remove if there's no need to distinguish)
+
+
+################################################################################
+###################################### STEC ####################################
+################################################################################
+
+# ------------------------------
+# 1. VARIABLE SELECTION
+# ------------------------------
+# For the training set, select the input and output columns (modify as needed)
+X_train = df_training[['S(g/L)', 'T_cond(°C)', 'T_evap(°C)', 'F(L/h)']].values  # Input variables
+y_train = df_training['STEC'].values  # Output variable (STEC)
+
+# For the validation set, select the corresponding columns
+X_val = df_validation[['S(g/L)', 'T_cond(°C)', 'T_evap(°C)', 'F(L/h)']].values  # Input variables
+y_val = df_validation['STEC'].values  # Output variable (STEC)
+
+# Also select the same variables for another validation set (in the second validation file)
+X_val2 = dfv[['S(g/L)', 'T_cond(°C)', 'T_evap(°C)', 'F(L/h)']].values  # Input variables
+y_val2 = dfv['STEC'].values  # Output variable (STEC)
+
+
+# ------------------------------
+# 2. DATA NORMALIZATION
+# ------------------------------
+# Normalize the input and output data to be in the range [0.1, 0.9]
+scaler_X = MinMaxScaler(feature_range=(0.1, 0.9))  # Scaler for the input variables
+scaler_y = MinMaxScaler(feature_range=(0.1, 0.9))  # Scaler for the output variables
+
+# Apply normalization to the training and validation data
+X_train = scaler_X.fit_transform(X_train)  # Normalize the input data for training
+X_val = scaler_X.transform(X_val)  # Normalize the input data for validation
+X_val2 = scaler_X.transform(X_val2)  # Normalize the input data for the second validation set
+
+y_train = scaler_y.fit_transform(y_train.reshape(-1, 1))  # Normalize the output data for training
+y_val = scaler_y.transform(y_val.reshape(-1, 1))  # Normalize the output data for validation
+y_val2 = scaler_y.transform(y_val2.reshape(-1, 1))  # Normalize the output data for the second validation set
+
+
+# ------------------------------
+# 3. PRELIMINARY MODEL TO DETECT NOISE
+# ------------------------------
+# Create a preliminary neural network model to predict 'STEC'
+model_prelim = Sequential([
+    Dense(32, input_dim=4, activation='relu', kernel_initializer='glorot_normal'),  # Input layer with 32 neurons
+    Dense(16, activation='relu', kernel_initializer='glorot_normal'),  # Hidden layer with 16 neurons
+    Dense(8, activation='relu', kernel_initializer='glorot_normal'),  # Hidden layer with 8 neurons
+    Dense(1, activation='linear')  # Output layer (prediction of STEC)
+])
+# Dense(num neurons in the current layer, number of inputs, activation function for the first layer, criterion for initializing weights), Dense(...), ..., number of layers you want to add
+
+# Compile the model using the 'adam' optimizer and 'mse' (mean squared error) loss function
+model_prelim.compile(optimizer='adam', loss='mse')
+
+# Train the preliminary model with the training data
+model_prelim.fit(X_train, y_train, epochs=500, batch_size=8, verbose=0)
+# Epoch: number of epochs in the training phase
+# batch_size: number of samples the model will process in each batch before updating the weights.
+# verbose: controls the output level of the training process, if 0 nothing is shown, if 1 progress is shown, and if 2 more detailed information is shown
+
+
+# ------------------------------
+# 4. OUTLIER FILTERING (NOISE)
+# ------------------------------
+# Make predictions on the training data
+y_pred_init = model_prelim.predict(X_train)
+
+# Denormalize the predictions and the true values to obtain the results in their original scale
+y_true_init = scaler_y.inverse_transform(y_train)
+y_pred_inv_init = scaler_y.inverse_transform(y_pred_init)
+
+# Calculate the absolute error between the predictions and the true values
+errors = np.abs(y_true_init - y_pred_inv_init)
+
+# Define a threshold to consider which data points are "outliers"
+threshold = np.mean(errors) + 2 * np.std(errors)
+
+# Create a mask to filter the data that is below the error threshold
+mask = errors.flatten() < threshold
+
+# Apply the mask to remove the noisy data
+X_train_filtered = X_train[mask]  # Filtered input data
+y_train_filtered = y_train[mask]  # Filtered output data
+
+# Print the number of filtered data points
+print(f"Filtered {np.sum(~mask)} data points with excessive noise.")
+
+
+# ------------------------------
+# 5. FINAL OPTIMIZED MODEL
+# ------------------------------
+# Create the final neural network model to predict 'STEC'
+model = Sequential([
+    Dense(32, input_dim=4, activation='relu', kernel_initializer='glorot_normal'),  # Input layer with 32 neurons
+    Dense(16, activation='relu', kernel_initializer='glorot_normal'),  # Hidden layer with 16 neurons
+    Dense(8, activation='relu', kernel_initializer='glorot_normal'),  # Hidden layer with 8 neurons
+    Dense(1, activation='linear')  # Output layer (prediction of STEC)
+])
+
+# Compile the model with the 'adam' optimizer and 'mse' loss function
+model.compile(optimizer='adam', loss='mse', metrics=['mse'])
+
+# Use EarlyStopping to avoid overfitting (stop training if validation doesn't improve)
+early_stop = EarlyStopping(monitor='val_loss', patience=50, restore_best_weights=True)
+
+# Train the model with the filtered data and validation
+history = model.fit(X_train_filtered, y_train_filtered,
+                    epochs=1000,
+                    batch_size=8,
+                    verbose=0,
+                    validation_data=(X_val, y_val),
+                    callbacks=[early_stop])
+
+
+# ------------------------------
+# 6. MODEL EVALUATION
+# ------------------------------
+def evaluate_and_plot(X, y, dataset_name):
+    # Make a prediction on the input data X using the trained model
+    y_pred = model.predict(X)
+
+    # Denormalize the true values (y) using the scaler to get them in their original scale
+    y_true = scaler_y.inverse_transform(y)
+
+    # Denormalize the model predictions (y_pred) to get them in their original scale
+    y_pred_inv = scaler_y.inverse_transform(y_pred)
+
+    # Calculate the **Root Mean Squared Error (RMSE)** between the true values and the predictions
+    rmse = np.sqrt(mean_squared_error(y_true, y_pred_inv))
+
+    # Calculate the **R²** (coefficient of determination) which indicates how well the model fits the data
+    r2 = r2_score(y_true, y_pred_inv)
+
+    # Print the RMSE and R² results with 3 decimal places
+    print(f"{dataset_name} - STEC - RMSE: {rmse:.3f}, R2: {r2:.3f}")
+
+    # Create a figure for the graph with a specific size
+    plt.figure(figsize=(6,5))
+
+    # Plot a scatter plot of the true values (y_true) against the predictions (y_pred_inv)
+    plt.scatter(y_true, y_pred_inv, alpha=0.7)  # alpha controls the transparency of the points
+
+    # Plot a red dashed line representing the perfect relationship (y_true == y_pred)
+    plt.plot([y_true.min(), y_true.max()], [y_true.min(), y_true.max()], 'r--')
+
+    # Labels for the X and Y axes of the graph
+    plt.xlabel('Real STEC')
+    plt.ylabel('Predicted STEC')
+
+    # Title of the graph including the dataset name and the R² value
+    plt.title(f'{dataset_name}: STEC\nR2={r2:.3f}, p={linregress(y_true.flatten(), y_pred_inv.flatten()).pvalue:.2e}')
+
+    # Adjust the layout to ensure that the elements of the graph do not overlap
+    plt.tight_layout()
+
+    # Display the graph
+    plt.show()
+
+# Calls to the function to evaluate and plot the performance on different datasets
+evaluate_and_plot(X_train_filtered, y_train_filtered, "Training")  # Evaluation for the filtered training set
+evaluate_and_plot(X_val, y_val, "Validation")  # Evaluation for the validation set
+evaluate_and_plot(X_val2, y_val2, "Validation Table 2")  # Evaluation for another validation set
+
+
+# Function to show the learned weights and biases of the model
+def show_weights_and_biases(model):
+    # Configuration to show all columns in Google Colab
+    pd.set_option('display.max_columns', None)
+    pd.set_option('display.width', None)
+    pd.set_option('display.expand_frame_repr', False)
+
+    # Iterate over each layer of the model
+    for i, layer in enumerate(model.layers):
+        weights, biases = layer.get_weights()
+
+        # Show the weight matrix
+        df_weights = pd.DataFrame(weights)
+        print(f"\n{'='*10} Layer {i+1} - Weight Matrix (W^{i+1}) {'='*10}")
+        print(df_weights)
+
+        # Show the bias vector
+        df_biases = pd.DataFrame(biases.reshape(1, -1))
+        print(f"\n{'='*10} Layer {i+1} - Bias Vector (b^{i+1}) {'='*10}")
+        print(df_biases)
+
+# Call the function (make sure to have a model defined)
+show_weights_and_biases(model)
+
+
+################################################################################
+###################################### PFLUX ###################################
+################################################################################
+
+# NOTE: The comments in this cell are analogous to those in the STEC prediction section.
+
+# ------------------------------
+# 1. Variable selection
+# ------------------------------
+
+# Training set
+X_train = df_training[['S(g/L)', 'T_cond(°C)', 'T_evap(°C)', 'F(L/h)']].values
+y_train = df_training['P_flux'].values
+
+# Validation set
+X_val = df_validation[['S(g/L)', 'T_cond(°C)', 'T_evap(°C)', 'F(L/h)']].values
+y_val = df_validation['P_flux'].values
+
+# Second validation table
+X_val2 = dfv[['S(g/L)', 'T_cond(°C)', 'T_evap(°C)', 'F(L/h)']].values
+y_val2 = dfv['P_flux'].values
+
+# ------------------------------
+# 2. Normalization [0.1, 0.9]
+# ------------------------------
+
+# Initialize scalers for input and output variables
+scaler_X = MinMaxScaler(feature_range=(0.1, 0.9))
+scaler_y = MinMaxScaler(feature_range=(0.1, 0.9))
+
+# Normalize input variables
+X_train = scaler_X.fit_transform(X_train)
+X_val = scaler_X.transform(X_val)
+X_val2 = scaler_X.transform(X_val2)
+
+# Normalize output variables
+y_train = scaler_y.fit_transform(y_train.reshape(-1, 1))
+y_val = scaler_y.transform(y_val.reshape(-1, 1))
+y_val2 = scaler_y.transform(y_val2.reshape(-1, 1))
+
+# ------------------------------
+# 3. Preliminary training to detect noise
+# ------------------------------
+
+# Build a simple neural network for initial training
+model_prelim = Sequential([
+    Dense(32, input_dim=4, activation='relu', kernel_initializer='glorot_normal'),
+    Dense(16, activation='relu', kernel_initializer='glorot_normal'),
+    Dense(8, activation='relu', kernel_initializer='glorot_normal'),
+    Dense(1, activation='linear')
+])
+
+# Compile the model
+model_prelim.compile(optimizer='adam', loss='mse')
+
+# Train the model to detect outliers
+model_prelim.fit(X_train, y_train, epochs=500, batch_size=8, verbose=0)
+
+# ------------------------------
+# 4. Outlier filtering
+# ------------------------------
+
+# Make predictions on training set
+y_pred_init = model_prelim.predict(X_train)
+
+# Denormalize predictions and true values
+y_true_init = scaler_y.inverse_transform(y_train)
+y_pred_inv_init = scaler_y.inverse_transform(y_pred_init)
+
+# Compute absolute error
+errors = np.abs(y_true_init - y_pred_inv_init)
+
+# Set outlier threshold (mean error + 2 standard deviations)
+threshold = np.mean(errors) + 2 * np.std(errors)
+
+# Create mask to filter out high-error points
+mask = errors.flatten() < threshold
+
+# Apply the mask
+X_train_filtered = X_train[mask]
+y_train_filtered = y_train[mask]
+
+# Print number of filtered points
+print(f"Filtered {np.sum(~mask)} noisy data points.")
+
+# ------------------------------
+# 5. Final optimized model
+# ------------------------------
+
+# Define the final model architecture
+model = Sequential([
+    Dense(32, input_dim=4, activation='relu', kernel_initializer='glorot_normal'),
+    Dense(16, activation='relu', kernel_initializer='glorot_normal'),
+    Dense(8, activation='relu', kernel_initializer='glorot_normal'),
+    Dense(1, activation='linear')
+])
+
+# Compile with optimizer, loss, and metric
+model.compile(optimizer='adam', loss='mse', metrics=['mse'])
+
+# Use EarlyStopping to prevent overfitting
+early_stop = EarlyStopping(monitor='val_loss', patience=50, restore_best_weights=True)
+
+# Train the final model using the filtered training data
+history = model.fit(X_train_filtered, y_train_filtered,
+                    epochs=1000,
+                    batch_size=8,
+                    verbose=0,
+                    validation_data=(X_val, y_val),
+                    callbacks=[early_stop])
+
+# ------------------------------
+# 6. Model evaluation
+# ------------------------------
+
+def evaluate_and_plot(X, y, dataset_name):
+    # Predict
+    y_pred = model.predict(X)
+
+    # Denormalize
+    y_true = scaler_y.inverse_transform(y)
+    y_pred_inv = scaler_y.inverse_transform(y_pred)
+
+    # Compute evaluation metrics
+    rmse = np.sqrt(mean_squared_error(y_true, y_pred_inv))
+    r2 = r2_score(y_true, y_pred_inv)
+
+    # Print metrics
+    print(f"{dataset_name} - PFLUX - RMSE: {rmse:.3f}, R2: {r2:.3f}")
+
+    # Plot results
+    plt.figure(figsize=(6, 5))
+    plt.scatter(y_true, y_pred_inv, alpha=0.7)
+    plt.plot([y_true.min(), y_true.max()], [y_true.min(), y_true.max()], 'r--')
+    plt.xlabel('Real PFLUX')
+    plt.ylabel('Predicted PFLUX')
+    plt.title(f'{dataset_name}: PFLUX\nR2={r2:.3f}, p={linregress(y_true.flatten(), y_pred_inv.flatten()).pvalue:.2e}')
+    plt.tight_layout()
+    plt.show()
+
+# Evaluate model on all datasets
+evaluate_and_plot(X_train_filtered, y_train_filtered, "Training")
+evaluate_and_plot(X_val, y_val, "Validation")
+evaluate_and_plot(X_val2, y_val2, "Validation Table 2")
+
+# ------------------------------
+# 7. Show model weights and biases
+# ------------------------------
+
+def show_weights_and_biases(model):
+    # Configure pandas display settings
+    pd.set_option('display.max_columns', None)
+    pd.set_option('display.width', None)
+    pd.set_option('display.expand_frame_repr', False)
+
+    # Iterate through model layers
+    for i, layer in enumerate(model.layers):
+        weights, biases = layer.get_weights()
+
+        # Display weight matrix
+        df_weights = pd.DataFrame(weights)
+        print(f"\n{'='*10} Layer {i+1} - Weight Matrix (W^{i+1}) {'='*10}")
+        print(df_weights)
+
+        # Display bias vector
+        df_biases = pd.DataFrame(biases.reshape(1, -1))
+        print(f"\n{'='*10} Layer {i+1} - Bias Vector (b^{i+1}) {'='*10}")
+        print(df_biases)
+
+# Call the function to show parameters
+show_weights_and_biases(model)
